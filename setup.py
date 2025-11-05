@@ -13,6 +13,8 @@ setup(
             sources=[
                 'src/api.cpp',
                 'src/spcumc.cu',
+                'src/spdmc.cu',
+                'src/decimation.cu',
             ],
             extra_compile_args={'cxx': ['-g'], 'nvcc': ['-O2', '--extended-lambda']}
         ),
