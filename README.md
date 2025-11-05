@@ -1,21 +1,21 @@
 # Sparse CUDA Marching Cubes for PyTorch
 
-This repository contains a high-performance PyTorch extension for performing the Marching Cubes algorithm on sparse voxel grids using CUDA. 
+This repository contains a high-performance PyTorch extension for performing the Marching Cubes and Dual Marching Cube on sparse voxel grids using CUDA. 
 The implementation is written in CUDA C++ and exposed to Python via PyTorch's C++ extension API, allowing seamless integration into existing PyTorch-based workflows.
 
 Core algorithm is highly derived from amazing [cubvh](https://github.com/ashawkey/cubvh) from [ashakey](https://github.com/ashawkey).
 
 ## Features
 
-- **CUDA-Accelerated:** Leverages the massive parallelism of NVIDIA GPUs to process thousands of voxels simultaneously.
-- **Sparse Voxel Support:** Operates on explicitly defined voxel coordinates (`[M, 3]`) and their corresponding corner values (`[M, 8]`) or center values (`[N, 3] - [N, 1]`), avoiding the need for dense 3D grids.
-- **Sparse Marching Cube** generates trimesh for given sparse voxel sdfs.
-- **Sparse Dual Marching Cube** generates quadmesh for given sparse voxel sdfs.
+- **Sparse Voxel:** Operates on explicitly defined voxel coordinates (`[M, 3]`) and their corresponding corner values (`[M, 8]`) or center values (`[N, 3] - [N, 1]`), avoiding the need for dense 3D grids.
+- **Sparse Marching Cube:** generates trimesh for given sparse voxel sdfs.
+- **Sparse Dual Marching Cube:** generates quadmesh for given sparse voxel sdfs.
 - **CUDA QEM Decimation** w/ preventing degenerate faces and normal fliping (experimental).
+- **CUDA-Accelerated:** Leverages the massive parallelism of NVIDIA GPUs to process thousands of voxels simultaneously.
 
 ![](result.png)
 
-- Left: Sparse DMC vs. Right: Sparse MC results
+- Left: **Sparse MC** vs. Right: **Sparse DMC** results
 
 ## Requirements
 
