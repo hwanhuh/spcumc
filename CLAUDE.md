@@ -102,8 +102,37 @@ This creates a sparse sphere SDF and generates both MC (triangle) and DMC (quad)
 ### Decimation Details
 - Only supports triangle meshes (not quads)
 - Uses QEM (Quadric Error Metrics) for edge collapse decisions
-- Includes experimental checks for degenerate faces, normal flipping, and self-intersecting faces after edge collapse
 - Operates on CPU (converts to CPU if input is CUDA, converts back after)
+
+#### Quality Preservation Checks (Improved Algorithm)
+
+The decimation now includes intelligent quality checks that **hard reject** invalid collapses (infinite cost) rather than just penalizing them:
+
+1. **Degenerate Face Prevention**:
+   - Minimum triangle area check (1e-10)
+   - Minimum angle check (~5 degrees) - prevents needle triangles
+   - Maximum aspect ratio check (50:1) - prevents sliver triangles
+   - All three criteria must pass for each affected triangle
+
+2. **Normal Flip Prevention**:
+   - Uses normalized normals (not area-weighted) for accurate comparison
+   - Detects hard flips (dot product < 0)
+   - Detects excessive deviation (angle > 10 degrees between old and new normals)
+   - Prevents visual artifacts from geometric inversion
+
+3. **Self-Intersection Detection**:
+   - Checks edge-triangle intersections in the collapse neighborhood
+   - Uses robust barycentric coordinate method
+   - Tests new edges formed by collapse position against surrounding triangles
+   - Prevents mesh from folding into itself
+
+4. **Progressive Decimation**:
+   - Multiple iterations (up to 10) for gradual quality-preserving decimation
+   - Collapses at most 30% of vertices per iteration
+   - Rebuilds adjacency information each iteration for accurate topology tracking
+
+#### Known Bug Fixed
+- Fixed critical bug where v1 one-ring check was using v0's adjacency data (line 338 in decimation.cu)
 
 ### Coordinate System
 - Uses integer voxel coordinates for sparse representation

@@ -65,6 +65,88 @@ __device__ inline float squared_norm(const V3f& v) { return dot(v, v); }
 __device__ inline float norm(const V3f& v) { return sqrtf(squared_norm(v)); }
 __device__ inline V3f normalize(const V3f& v) { float n = norm(v); return n > 1e-6f ? V3f{v.x * (1.f/n), v.y * (1.f/n), v.z * (1.f/n)} : V3f{0.f,0.f,0.f}; }
 
+// Additional geometric utility functions for improved quality checks
+__device__ inline float triangle_area(const V3f& p0, const V3f& p1, const V3f& p2) {
+    return 0.5f * norm(cross(p1 - p0, p2 - p0));
+}
+
+__device__ inline float triangle_min_angle(const V3f& p0, const V3f& p1, const V3f& p2) {
+    V3f e0 = p1 - p0, e1 = p2 - p1, e2 = p0 - p2;
+    float l0 = norm(e0), l1 = norm(e1), l2 = norm(e2);
+    if (l0 < 1e-8f || l1 < 1e-8f || l2 < 1e-8f) return 0.0f;
+
+    // Use law of cosines to find angles
+    float cos_a0 = dot(-e0, e2) / (l0 * l2);
+    float cos_a1 = dot(-e1, e0) / (l1 * l0);
+    float cos_a2 = dot(-e2, e1) / (l2 * l1);
+
+    // Clamp to avoid numerical issues
+    cos_a0 = fminf(1.0f, fmaxf(-1.0f, cos_a0));
+    cos_a1 = fminf(1.0f, fmaxf(-1.0f, cos_a1));
+    cos_a2 = fminf(1.0f, fmaxf(-1.0f, cos_a2));
+
+    return fminf(acosf(cos_a0), fminf(acosf(cos_a1), acosf(cos_a2)));
+}
+
+__device__ inline float triangle_aspect_ratio(const V3f& p0, const V3f& p1, const V3f& p2) {
+    V3f e0 = p1 - p0, e1 = p2 - p1, e2 = p0 - p2;
+    float l0 = norm(e0), l1 = norm(e1), l2 = norm(e2);
+    float max_edge = fmaxf(l0, fmaxf(l1, l2));
+    float area = triangle_area(p0, p1, p2);
+    if (area < 1e-8f) return 1e6f; // Very bad aspect ratio
+    // Aspect ratio: ratio of circumradius to inradius (normalized)
+    return max_edge / (4.0f * area / (l0 + l1 + l2));
+}
+
+// Check if a point is on the same side of a plane as the reference point
+__device__ inline bool same_side_of_plane(const V3f& point, const V3f& ref, const V3f& plane_p, const V3f& plane_n) {
+    float d1 = dot(point - plane_p, plane_n);
+    float d2 = dot(ref - plane_p, plane_n);
+    return d1 * d2 >= -1e-6f; // Small tolerance for numerical stability
+}
+
+// Check if edge (e0, e1) intersects triangle (t0, t1, t2) - using robust method
+__device__ inline bool edge_intersects_triangle(const V3f& e0, const V3f& e1,
+                                                 const V3f& t0, const V3f& t1, const V3f& t2) {
+    // Skip if edge shares vertices with triangle
+    float eps = 1e-7f;
+    if (squared_norm(e0 - t0) < eps || squared_norm(e0 - t1) < eps || squared_norm(e0 - t2) < eps) return false;
+    if (squared_norm(e1 - t0) < eps || squared_norm(e1 - t1) < eps || squared_norm(e1 - t2) < eps) return false;
+
+    V3f tri_normal = cross(t1 - t0, t2 - t0);
+    float tri_area_sq = squared_norm(tri_normal);
+    if (tri_area_sq < 1e-12f) return false; // Degenerate triangle
+
+    tri_normal = normalize(tri_normal);
+    float d = -dot(tri_normal, t0);
+
+    // Check if edge endpoints are on opposite sides of triangle plane
+    float dist0 = dot(tri_normal, e0) + d;
+    float dist1 = dot(tri_normal, e1) + d;
+
+    if (dist0 * dist1 > 1e-8f) return false; // Both on same side
+
+    // Calculate intersection point
+    float t = dist0 / (dist0 - dist1);
+    if (t < -1e-6f || t > 1.0f + 1e-6f) return false; // Outside edge
+
+    V3f intersection = e0 + (e1 - e0) * t;
+
+    // Check if intersection point is inside triangle using barycentric coordinates
+    V3f v0 = t1 - t0, v1 = t2 - t0, v2 = intersection - t0;
+    float dot00 = dot(v0, v0);
+    float dot01 = dot(v0, v1);
+    float dot02 = dot(v0, v2);
+    float dot11 = dot(v1, v1);
+    float dot12 = dot(v1, v2);
+
+    float inv_denom = 1.0f / (dot00 * dot11 - dot01 * dot01);
+    float u = (dot11 * dot02 - dot01 * dot12) * inv_denom;
+    float v = (dot00 * dot12 - dot01 * dot02) * inv_denom;
+
+    return (u >= -1e-6f) && (v >= -1e-6f) && (u + v <= 1.0f + 1e-6f);
+}
+
 __device__ inline void atomicAdd(Quadricf* addr, const Quadricf& val) {
     atomicAdd(&addr->a00, val.a00); atomicAdd(&addr->a01, val.a01); atomicAdd(&addr->a02, val.a02);
     atomicAdd(&addr->a11, val.a11); atomicAdd(&addr->a12, val.a12); atomicAdd(&addr->a22, val.a22);
@@ -176,11 +258,18 @@ __global__ void kernel_calculate_edge_costs(
         pos = midpoint;
     }
 
-    float cost = q.a00*pos.x*pos.x + 2*q.a01*pos.x*pos.y + 2*q.a02*pos.x*pos.z + q.a11*pos.y*pos.y + 2*q.a12*pos.y*pos.z + q.a22*pos.z*pos.z + 
+    float cost = q.a00*pos.x*pos.x + 2*q.a01*pos.x*pos.y + 2*q.a02*pos.x*pos.z + q.a11*pos.y*pos.y + 2*q.a12*pos.y*pos.z + q.a22*pos.z*pos.z +
                  2*q.b0*pos.x + 2*q.b1*pos.y + 2*q.b2*pos.z + q.c;
 
     bool causes_flip = false;
     bool causes_degeneracy = false;
+    bool causes_self_intersection = false;
+
+    // Quality thresholds
+    const float MIN_ANGLE_THRESHOLD = 0.087266f;  // ~5 degrees in radians
+    const float MAX_ASPECT_RATIO = 50.0f;         // Maximum allowed aspect ratio
+    const float MIN_AREA_THRESHOLD = 1e-10f;      // Minimum triangle area
+    const float NORMAL_ANGLE_THRESHOLD = 0.9848f; // cos(10 degrees) for normal change
 
     // Iterate over one-ring neighborhood of v0
     for (int i = vertex_to_face_offsets[v0_idx]; i < vertex_to_face_offsets[v0_idx+1]; ++i) {
@@ -192,35 +281,61 @@ __global__ void kernel_calculate_edge_costs(
             (f.v0 == v1_idx || f.v1 == v1_idx || f.v2 == v1_idx)) {
             continue;
         }
-        
+
         int p_idx = f.v0, q_idx = f.v1, r_idx = f.v2;
         V3f p = vertices[p_idx], q_v = vertices[q_idx], r = vertices[r_idx];
-        
-        V3f old_normal = cross(q_v - p, r - p);
+
+        // Store original triangle
+        V3f old_p = p, old_q = q_v, old_r = r;
+        V3f old_normal = cross(old_q - old_p, old_r - old_p);
+        float old_area_sq = squared_norm(old_normal);
+
+        if (old_area_sq < MIN_AREA_THRESHOLD) continue; // Skip already degenerate faces
+
+        old_normal = normalize(old_normal);
 
         // Simulate the new positions
         if (p_idx == v0_idx || p_idx == v1_idx) p = pos;
         if (q_idx == v0_idx || q_idx == v1_idx) q_v = pos;
         if (r_idx == v0_idx || r_idx == v1_idx) r = pos;
-        
-        V3f new_normal = cross(q_v - p, r - p);
 
-        // Check for near-zero area (degeneration)
-        if (squared_norm(new_normal) < 1e-12f) {
+        V3f new_normal = cross(q_v - p, r - p);
+        float new_area = 0.5f * norm(new_normal);
+
+        // IMPROVED DEGENERATE CHECK: Multiple criteria
+        if (new_area < MIN_AREA_THRESHOLD) {
             causes_degeneracy = true;
             break;
         }
 
-        // Check for normal flip
-        if (dot(old_normal, new_normal) < 0.0f) {
+        float min_angle = triangle_min_angle(p, q_v, r);
+        if (min_angle < MIN_ANGLE_THRESHOLD) {
+            causes_degeneracy = true;
+            break;
+        }
+
+        float aspect_ratio = triangle_aspect_ratio(p, q_v, r);
+        if (aspect_ratio > MAX_ASPECT_RATIO) {
+            causes_degeneracy = true;
+            break;
+        }
+
+        // IMPROVED NORMAL FLIP CHECK: Use normalized normals and angle threshold
+        new_normal = normalize(new_normal);
+        float normal_dot = dot(old_normal, new_normal);
+        if (normal_dot < 0.0f) {  // Hard flip
+            causes_flip = true;
+            break;
+        }
+        if (normal_dot < NORMAL_ANGLE_THRESHOLD) {  // Too much deviation
             causes_flip = true;
             break;
         }
     }
 
-    // v1 one-ring
+    // v1 one-ring (FIX: was v0_idx, should be v1_idx)
     if (!causes_flip && !causes_degeneracy) {
-        for (int i = vertex_to_face_offsets[v0_idx]; i < vertex_to_face_offsets[v0_idx+1]; ++i) {
+        for (int i = vertex_to_face_offsets[v1_idx]; i < vertex_to_face_offsets[v1_idx+1]; ++i) {
             int face_idx = vertex_to_face_map[i];
             Tri f = faces[face_idx];
 
@@ -229,46 +344,130 @@ __global__ void kernel_calculate_edge_costs(
                 (f.v0 == v1_idx || f.v1 == v1_idx || f.v2 == v1_idx)) {
                 continue;
             }
-            
+
             int p_idx = f.v0, q_idx = f.v1, r_idx = f.v2;
             V3f p = vertices[p_idx], q_v = vertices[q_idx], r = vertices[r_idx];
-            
-            V3f old_normal = cross(q_v - p, r - p);
+
+            // Store original triangle
+            V3f old_p = p, old_q = q_v, old_r = r;
+            V3f old_normal = cross(old_q - old_p, old_r - old_p);
+            float old_area_sq = squared_norm(old_normal);
+
+            if (old_area_sq < MIN_AREA_THRESHOLD) continue;
+
+            old_normal = normalize(old_normal);
 
             // Simulate the new positions
             if (p_idx == v0_idx || p_idx == v1_idx) p = pos;
             if (q_idx == v0_idx || q_idx == v1_idx) q_v = pos;
             if (r_idx == v0_idx || r_idx == v1_idx) r = pos;
-            
-            V3f new_normal = cross(q_v - p, r - p);
 
-            // Check for near-zero area (degeneration)
-            if (squared_norm(new_normal) < 1e-11f) {
+            V3f new_normal = cross(q_v - p, r - p);
+            float new_area = 0.5f * norm(new_normal);
+
+            // IMPROVED DEGENERATE CHECK
+            if (new_area < MIN_AREA_THRESHOLD) {
                 causes_degeneracy = true;
                 break;
             }
 
-            // Check for normal flip
-            if (dot(old_normal, new_normal) < 0.0f) {
+            float min_angle = triangle_min_angle(p, q_v, r);
+            if (min_angle < MIN_ANGLE_THRESHOLD) {
+                causes_degeneracy = true;
+                break;
+            }
+
+            float aspect_ratio = triangle_aspect_ratio(p, q_v, r);
+            if (aspect_ratio > MAX_ASPECT_RATIO) {
+                causes_degeneracy = true;
+                break;
+            }
+
+            // IMPROVED NORMAL FLIP CHECK
+            new_normal = normalize(new_normal);
+            float normal_dot = dot(old_normal, new_normal);
+            if (normal_dot < 0.0f) {
+                causes_flip = true;
+                break;
+            }
+            if (normal_dot < NORMAL_ANGLE_THRESHOLD) {
                 causes_flip = true;
                 break;
             }
         }
     }
-    
-    // Penalty
-    if (is_boundary[edge_idx]) {
-        cost += edge_len_sq * 1000.0f;
-    }
-    if (causes_flip) {
-        cost += edge_len_sq * 1000.0f;
-    }
-    if (causes_degeneracy) { 
-        cost += edge_len_sq * 1000.0f; 
+
+    // SELF-INTERSECTION CHECK: Check if collapsed edge creates intersections
+    // We check the new edges formed by the collapse position against surrounding triangles
+    if (!causes_flip && !causes_degeneracy) {
+        // Collect edges from v0 one-ring that will remain after collapse
+        for (int i = vertex_to_face_offsets[v0_idx]; i < vertex_to_face_offsets[v0_idx+1] && !causes_self_intersection; ++i) {
+            int face_idx = vertex_to_face_map[i];
+            Tri f = faces[face_idx];
+
+            // Skip faces that will be removed
+            if ((f.v0 == v0_idx || f.v1 == v0_idx || f.v2 == v0_idx) &&
+                (f.v0 == v1_idx || f.v1 == v1_idx || f.v2 == v1_idx)) {
+                continue;
+            }
+
+            // Get the other vertices in this triangle (not v0 or v1)
+            int other_vertices[2];
+            int count = 0;
+            if (f.v0 != v0_idx && f.v0 != v1_idx) other_vertices[count++] = f.v0;
+            if (f.v1 != v0_idx && f.v1 != v1_idx) other_vertices[count++] = f.v1;
+            if (f.v2 != v0_idx && f.v2 != v1_idx) other_vertices[count++] = f.v2;
+
+            // Check new edges against triangles in the two-ring
+            if (count == 2) {
+                V3f edge_a = vertices[other_vertices[0]];
+                V3f edge_b = vertices[other_vertices[1]];
+
+                // Check against v1 one-ring triangles
+                for (int j = vertex_to_face_offsets[v1_idx]; j < vertex_to_face_offsets[v1_idx+1]; ++j) {
+                    int check_face_idx = vertex_to_face_map[j];
+                    if (check_face_idx == face_idx) continue; // Same face
+
+                    Tri cf = faces[check_face_idx];
+
+                    // Skip if this face will be removed or shares vertices
+                    if ((cf.v0 == v0_idx || cf.v1 == v0_idx || cf.v2 == v0_idx) &&
+                        (cf.v0 == v1_idx || cf.v1 == v1_idx || cf.v2 == v1_idx)) {
+                        continue;
+                    }
+
+                    // Skip if they share an edge (adjacent triangles)
+                    int shared = 0;
+                    if (cf.v0 == other_vertices[0] || cf.v0 == other_vertices[1]) shared++;
+                    if (cf.v1 == other_vertices[0] || cf.v1 == other_vertices[1]) shared++;
+                    if (cf.v2 == other_vertices[0] || cf.v2 == other_vertices[1]) shared++;
+                    if (shared >= 2) continue;
+
+                    V3f t0 = vertices[cf.v0], t1 = vertices[cf.v1], t2 = vertices[cf.v2];
+
+                    // Update positions for vertices being collapsed
+                    if (cf.v0 == v0_idx || cf.v0 == v1_idx) t0 = pos;
+                    if (cf.v1 == v0_idx || cf.v1 == v1_idx) t1 = pos;
+                    if (cf.v2 == v0_idx || cf.v2 == v1_idx) t2 = pos;
+
+                    // Check edge-triangle intersection (edges from pos to other vertices)
+                    if (edge_intersects_triangle(pos, edge_a, t0, t1, t2) ||
+                        edge_intersects_triangle(pos, edge_b, t0, t1, t2)) {
+                        causes_self_intersection = true;
+                        break;
+                    }
+                }
+            }
+        }
     }
 
-    if (causes_flip || causes_degeneracy) {
-        pos = midpoint;
+    // HARD REJECTION: Set cost to infinity instead of just adding penalty
+    if (is_boundary[edge_idx]) {
+        cost += edge_len_sq * 1000.0f;  // High penalty but not rejection for boundary
+    }
+    if (causes_flip || causes_degeneracy || causes_self_intersection) {
+        cost = 1e20f;  // Effectively infinite - reject this collapse
+        pos = midpoint; // Fallback position (won't be used due to infinite cost)
     }
     
     costs[edge_idx] = cost;
@@ -391,7 +590,7 @@ void decimate_cuda(std::vector<V3f>& vertices, std::vector<Tri>& faces, int targ
     thrust::device_vector<V3f> d_vertices = vertices;
     thrust::device_vector<Tri> d_faces = faces;
 
-    const int MAX_ITERATIONS = 1;
+    const int MAX_ITERATIONS = 10;  // Allow multiple iterations for progressive decimation
     const int THREADS_PER_BLOCK = 256;
 
     for (int iter = 0; iter < MAX_ITERATIONS && num_vertices > target_vertex_count; ++iter) {
@@ -480,8 +679,9 @@ void decimate_cuda(std::vector<V3f>& vertices, std::vector<Tri>& faces, int targ
         std::vector<int> collapse_v0_indices_batch;
 
         // Control the number of collapses per iteration for stability
-        // int num_collapses_this_iteration = std::min((int)(num_vertices * 0.5), num_vertices - target_vertex_count);
-        int num_collapses_this_iteration = num_vertices - target_vertex_count;
+        // Collapse at most 30% of vertices per iteration to maintain quality
+        int max_collapses_per_iter = std::max(1, (int)(num_vertices * 0.3));
+        int num_collapses_this_iteration = std::min(max_collapses_per_iter, num_vertices - target_vertex_count);
         if (num_collapses_this_iteration <= 0 && num_vertices > target_vertex_count) {
              num_collapses_this_iteration = 1; 
         } else if (num_collapses_this_iteration <= 0) {
