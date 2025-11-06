@@ -217,6 +217,44 @@ __global__ void kernel_calculate_edge_costs(
             break;
         }
     }
+
+    // v1 one-ring
+    if (!causes_flip && !causes_degeneracy) {
+        for (int i = vertex_to_face_offsets[v0_idx]; i < vertex_to_face_offsets[v0_idx+1]; ++i) {
+            int face_idx = vertex_to_face_map[i];
+            Tri f = faces[face_idx];
+
+            // This face will be removed by the collapse, so no need to check it.
+            if ((f.v0 == v0_idx || f.v1 == v0_idx || f.v2 == v0_idx) &&
+                (f.v0 == v1_idx || f.v1 == v1_idx || f.v2 == v1_idx)) {
+                continue;
+            }
+            
+            int p_idx = f.v0, q_idx = f.v1, r_idx = f.v2;
+            V3f p = vertices[p_idx], q_v = vertices[q_idx], r = vertices[r_idx];
+            
+            V3f old_normal = cross(q_v - p, r - p);
+
+            // Simulate the new positions
+            if (p_idx == v0_idx || p_idx == v1_idx) p = pos;
+            if (q_idx == v0_idx || q_idx == v1_idx) q_v = pos;
+            if (r_idx == v0_idx || r_idx == v1_idx) r = pos;
+            
+            V3f new_normal = cross(q_v - p, r - p);
+
+            // Check for near-zero area (degeneration)
+            if (squared_norm(new_normal) < 1e-11f) {
+                causes_degeneracy = true;
+                break;
+            }
+
+            // Check for normal flip
+            if (dot(old_normal, new_normal) < 0.0f) {
+                causes_flip = true;
+                break;
+            }
+        }
+    }
     
     // Penalty
     if (is_boundary[edge_idx]) {
@@ -227,6 +265,10 @@ __global__ void kernel_calculate_edge_costs(
     }
     if (causes_degeneracy) { 
         cost += edge_len_sq * 1000.0f; 
+    }
+
+    if (causes_flip || causes_degeneracy) {
+        pos = midpoint;
     }
     
     costs[edge_idx] = cost;

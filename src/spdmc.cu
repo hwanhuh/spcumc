@@ -685,9 +685,9 @@ __global__ void solveQemKernel(int totalPatches, const Quadric* patchQuadrics,
          q.cd * (q.ab * q.bc - q.ac * q.b2)
     );
     float y = inv_det * (
-         q.ad * (q.ac * q.bc - q.ab * q.c2) -
+         q.ad * (q.ab * q.c2 - q.ac * q.bc) -
          q.bd * (q.a2 * q.c2 - q.ac * q.ac) +
-         q.cd * (q.ab * q.ac - q.a2 * q.bc)
+         q.cd * (q.a2 * q.bc - q.ab * q.ac)
     );
     float z = inv_det * (
         -q.ad * (q.ab * q.bc - q.ac * q.b2) +

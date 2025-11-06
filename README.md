@@ -3,7 +3,7 @@
 This repository contains a high-performance PyTorch extension for performing the Marching Cubes and Dual Marching Cube on sparse voxel grids using CUDA. 
 The implementation is written in CUDA C++ and exposed to Python via PyTorch's C++ extension API, allowing seamless integration into existing PyTorch-based workflows.
 
-Core algorithm is highly derived from amazing [cubvh](https://github.com/ashawkey/cubvh) from [ashakey](https://github.com/ashawkey).
+Core algorithm is derived from amazing [cubvh](https://github.com/ashawkey/cubvh) from [ashakey](https://github.com/ashawkey) and [pdmc](https://github.com/seonghunn/pdmc).
 
 ## Features
 
@@ -34,6 +34,9 @@ cd spcumc
 
 # Install the package
 pip install . 
+
+# clean existing build and re-install in editable mode
+rm -rf *.egg-info build && pip install -e .
 ```
 
 ## Usage
