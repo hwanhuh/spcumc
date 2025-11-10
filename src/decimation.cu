@@ -220,7 +220,7 @@ __global__ void kernel_calculate_edge_costs(
 
     // v1 one-ring
     if (!causes_flip && !causes_degeneracy) {
-        for (int i = vertex_to_face_offsets[v0_idx]; i < vertex_to_face_offsets[v0_idx+1]; ++i) {
+        for (int i = vertex_to_face_offsets[v1_idx]; i < vertex_to_face_offsets[v1_idx+1]; ++i) {
             int face_idx = vertex_to_face_map[i];
             Tri f = faces[face_idx];
 
@@ -260,15 +260,10 @@ __global__ void kernel_calculate_edge_costs(
     if (is_boundary[edge_idx]) {
         cost += edge_len_sq * 1000.0f;
     }
-    if (causes_flip) {
-        cost += edge_len_sq * 1000.0f;
-    }
-    if (causes_degeneracy) { 
-        cost += edge_len_sq * 1000.0f; 
-    }
-
+    
     if (causes_flip || causes_degeneracy) {
         pos = midpoint;
+        cost += edge_len_sq * 1000.0f; 
     }
     
     costs[edge_idx] = cost;
@@ -391,7 +386,7 @@ void decimate_cuda(std::vector<V3f>& vertices, std::vector<Tri>& faces, int targ
     thrust::device_vector<V3f> d_vertices = vertices;
     thrust::device_vector<Tri> d_faces = faces;
 
-    const int MAX_ITERATIONS = 1;
+    const int MAX_ITERATIONS = 2;
     const int THREADS_PER_BLOCK = 256;
 
     for (int iter = 0; iter < MAX_ITERATIONS && num_vertices > target_vertex_count; ++iter) {
